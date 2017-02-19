@@ -13,10 +13,15 @@
 // TODO read configuration
 // TODO persist counters on exit
 
+struct contextinfo {
+    char *context;
+    char *username;
+};
+
 size_t num_users;
 struct userinfo {
-    char *contextinfo; // TODO consider context (ignored for now)
-    char *userid;
+    size_t num_context;
+    struct contextinfo *context;
     char *yubi_public_id;
     uint32_t combined_counter;
     uint8_t aeskey[YUBIKEY_KEY_SIZE];
@@ -32,25 +37,37 @@ static void error_exit(const char *message, int use_perror)
     exit(1);
 }
 
-struct userinfo * get_userinfo_by_user_id(const char *user)
+static struct userinfo * get_userinfo_by_username(char *context, char *username)
 {
-    size_t i;
+    size_t i, j;
     for (i = 0; i < num_users; i++) {
-        if (!strcmp(users[i].userid, user))
-            return &users[i];
+        for (j = 0; j < users[i].num_context; j++) {
+            if (!strcmp(users[i].context[j].context, context)) {
+                if (!strcmp(users[i].context[j].username, username))
+                    return &users[i];
+            }
+        }
     }
-    return NULL;
 }
 
-struct userinfo * get_userinfo_by_public_id(const char *token)
+static struct userinfo * get_userinfo_by_public_id(char *context,
+                                                   const char *token,
+                                                   char **out_username)
 {
-    size_t i;
+    // TODO consider context
+    size_t i, j;
     size_t tokenlen = strlen(token);
     if (tokenlen <= 32)
         return NULL;
     for (i = 0; i < num_users; i++) {
-        if (!strncmp(users[i].yubi_public_id, token, tokenlen - 32))
-            return &users[i];
+        if (!strncmp(users[i].yubi_public_id, token, tokenlen - 32)) {
+            for (j = 0; j < users[i].num_context; j++) {
+                if (!strcmp(users[i].context[j].context, context)) {
+                    *out_username = users[i].context[j].username;
+                    return &users[i];
+                }
+            }
+        }
     }
     return NULL;
 }
@@ -143,9 +160,9 @@ static void handle_connection(int fd)
         return;
 
     if (strlen(userid) == 0) {
-        userinfo = get_userinfo_by_public_id(token);
+        userinfo = get_userinfo_by_public_id(context, token, &userid);
     } else {
-        userinfo = get_userinfo_by_user_id(userid);
+        userinfo = get_userinfo_by_username(context, userid);
     }
 
     if (!userinfo)
@@ -164,7 +181,7 @@ static void handle_connection(int fd)
         return;
 
     userinfo->combined_counter = combined_counter;
-    write(fd, userinfo->userid, strlen(userinfo->userid) + 1);
+    write(fd, userid, strlen(userid) + 1);
 }
 
 int main(int argc, char *argv[])
