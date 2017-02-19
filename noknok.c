@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <unistd.h>
 
 // TODO try what happens if illegal characters are fed to _yubikey_decode()
 // TODO persist counters on exit
@@ -126,7 +127,7 @@ static bool read_request(int fd, char *buffer, size_t bufsize, char **context,
     *context = NULL;
     *user = NULL;
     *token = NULL;
-    for (i = 0; i < r; i++) {
+    for (i = 0; i < (size_t)r; i++) {
         if (buffer[i] == '!') {
             buffer[i] = 0;
             if (!*context) {
@@ -271,15 +272,15 @@ static void read_config(char *configpath)
                 config_error_exit(linenum); /* id already set */
             if (line_length != 23)
                 config_error_exit(linenum); /* ID length incorrect */
-            yubikey_modhex_decode(private_id, linebuf + 11, sizeof(private_id));
+            yubikey_modhex_decode((char *)private_id, linebuf + 11,
+                                  sizeof(private_id));
         } else if (!strncmp(linebuf, "aeskey ", 7)) {
             if (memcmp(zerokey, aeskey, sizeof(zerokey)))
                 config_error_exit(linenum); /* key already set */
             if (line_length != 39)
                 config_error_exit(linenum); /* AES key length incorrect */
-            yubikey_hex_decode(aeskey, linebuf + 7, sizeof(aeskey));
+            yubikey_hex_decode((char *)aeskey, linebuf + 7, sizeof(aeskey));
         } else if (!strncmp(linebuf, "public_id ", 10)) {
-            size_t i;
             if (public_id)
                 config_error_exit(linenum); /* public ID already set */
             public_id = strdup(linebuf + 10);
