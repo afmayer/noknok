@@ -1,4 +1,5 @@
 #include "yubikey.h"
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,7 +11,6 @@
 #include <sys/un.h>
 
 // TODO try what happens if illegal characters are fed to _yubikey_decode()
-// TODO read configuration
 // TODO persist counters on exit
 
 struct contextinfo {
@@ -27,6 +27,9 @@ struct userinfo {
     uint8_t aeskey[YUBIKEY_KEY_SIZE];
     uint8_t yubi_private_id[YUBIKEY_UID_SIZE];
 } *users;
+
+static uint8_t zeroid[YUBIKEY_UID_SIZE];
+static uint8_t zerokey[YUBIKEY_KEY_SIZE];
 
 static void error_exit(const char *message, int use_perror)
 {
@@ -48,18 +51,20 @@ static struct userinfo * get_userinfo_by_username(char *context, char *username)
             }
         }
     }
+    return NULL;
 }
 
 static struct userinfo * get_userinfo_by_public_id(char *context,
                                                    const char *token,
                                                    char **out_username)
 {
-    // TODO consider context
     size_t i, j;
     size_t tokenlen = strlen(token);
     if (tokenlen <= 32)
         return NULL;
     for (i = 0; i < num_users; i++) {
+        if (!users[i].yubi_public_id)
+            continue;
         if (!strncmp(users[i].yubi_public_id, token, tokenlen - 32)) {
             for (j = 0; j < users[i].num_context; j++) {
                 if (!strcmp(users[i].context[j].context, context)) {
@@ -159,11 +164,10 @@ static void handle_connection(int fd)
     if (!read_request(fd, buffer, sizeof(buffer), &context, &userid, &token))
         return;
 
-    if (strlen(userid) == 0) {
+    if (strlen(userid) == 0)
         userinfo = get_userinfo_by_public_id(context, token, &userid);
-    } else {
+    else
         userinfo = get_userinfo_by_username(context, userid);
-    }
 
     if (!userinfo)
         return; /* can't identify user */
@@ -182,6 +186,130 @@ static void handle_connection(int fd)
 
     userinfo->combined_counter = combined_counter;
     write(fd, userid, strlen(userid) + 1);
+}
+
+static bool add_userinfo_if_complete(uint8_t *private_id, uint8_t *aeskey,
+                                     char *public_id, size_t num_context,
+                                     struct contextinfo *context)
+{
+    /* private ID and AES key are mandatory */
+    if (!memcmp(zeroid, private_id, sizeof(zeroid)))
+        return false;
+    if (!memcmp(zerokey, aeskey, sizeof(zerokey)))
+        return false;
+    users = realloc(users, (num_users + 1) * sizeof(*users));
+    if (!users)
+        error_exit("Out of memory", 0);
+
+    users[num_users].num_context = num_context;
+    users[num_users].context = context;
+    users[num_users].combined_counter = 0; // TODO read from other config
+    memcpy(users[num_users].aeskey, aeskey, sizeof(users[num_users].aeskey));
+    memcpy(users[num_users].yubi_private_id, private_id,
+            sizeof(users[num_users].yubi_private_id));
+    users[num_users].yubi_public_id = public_id;
+    num_users++;
+    return true;
+}
+
+static void config_error_exit(size_t linenumber)
+{
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "Error in configuration file (line %zu)",
+             linenumber);
+    error_exit(buffer, 0);
+}
+
+static void read_config(char *configpath)
+{
+    int fd;
+    struct stat stat;
+    FILE *stream;
+    ssize_t line_length;
+    char *linebuf = NULL;
+    size_t linebufsize;
+    size_t linenum = 0;
+
+    uint8_t aeskey[YUBIKEY_KEY_SIZE] = {0};
+    uint8_t private_id[YUBIKEY_UID_SIZE] = {0};
+    char *public_id = NULL;
+    size_t num_context = 0;
+    struct contextinfo *context = NULL;
+    char *temp_context = NULL;
+    char *temp_contextuser = NULL;
+
+    fd = open(configpath, O_RDONLY);
+    if (fd == -1)
+        error_exit("Error opening configuration file", 1);
+    if (fstat(fd, &stat) == -1)
+        error_exit("Error calling stat() on configuration file", 1);
+    if (stat.st_mode & (S_IROTH | S_IWOTH))
+        error_exit("Won't accept a world-readable or world-writable "
+                   "configuration file", 0);
+    stream = fdopen(fd, "r");
+    if (!stream)
+        error_exit("Error opening configuration file stream", 1);
+
+    while ((line_length = getline(&linebuf, &linebufsize, stream)) != -1) {
+        linenum++;
+        if (linebuf[line_length - 1] == '\n') {
+            linebuf[line_length - 1] = '\0';
+            line_length--;
+        }
+        if (line_length == 0) {
+            /* empty line - previous userinfo is complete */
+            if (!add_userinfo_if_complete(private_id, aeskey, public_id,
+                                          num_context, context))
+                config_error_exit(linenum);
+            memset(private_id, 0, sizeof(private_id));
+            memset(aeskey, 0, sizeof(aeskey));
+            public_id = NULL;
+            num_context = 0;
+            context = NULL;
+        } else if (!strncmp(linebuf, "private_id ", 11)) {
+            if (memcmp(zeroid, private_id, sizeof(zeroid)))
+                config_error_exit(linenum); /* id already set */
+            if (line_length != 23)
+                config_error_exit(linenum); /* ID length incorrect */
+            yubikey_modhex_decode(private_id, linebuf + 11, sizeof(private_id));
+        } else if (!strncmp(linebuf, "aeskey ", 7)) {
+            if (memcmp(zerokey, aeskey, sizeof(zerokey)))
+                config_error_exit(linenum); /* key already set */
+            if (line_length != 39)
+                config_error_exit(linenum); /* AES key length incorrect */
+            yubikey_hex_decode(aeskey, linebuf + 7, sizeof(aeskey));
+        } else if (!strncmp(linebuf, "public_id ", 10)) {
+            size_t i;
+            if (public_id)
+                config_error_exit(linenum); /* public ID already set */
+            public_id = strdup(linebuf + 10);
+        } else if (!strncmp(linebuf, "context ", 8)) {
+            if (temp_context)
+                config_error_exit(linenum);
+            temp_context = strdup(linebuf + 8);
+        } else if (!strncmp(linebuf, "contextuser ", 12)) {
+            if (temp_contextuser)
+                config_error_exit(linenum);
+            temp_contextuser = strdup(linebuf + 12);
+        }
+
+        if (temp_context && temp_contextuser) {
+            context = realloc(context, (num_context + 1) * sizeof(*context));
+            if (!context)
+                error_exit("Out of memory", 0);
+            context[num_context].context = temp_context;
+            context[num_context].username = temp_contextuser;
+            num_context++;
+            temp_context = NULL;
+            temp_contextuser = NULL;
+        }
+    }
+
+    /* add the last user in the file */
+    if (!add_userinfo_if_complete(private_id, aeskey, public_id, num_context,
+                                  context))
+        config_error_exit(linenum);
+    free(linebuf);
 }
 
 int main(int argc, char *argv[])
