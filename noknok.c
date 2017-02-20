@@ -177,7 +177,7 @@ static void handle_connection(int fd)
     if (ret != 0)
         return;
 
-    if (memcmp(private_id, userinfo->yubi_private_id, sizeof(private_id)))
+    if (memcmp(private_id, userinfo->yubi_private_id, YUBIKEY_UID_SIZE))
         return;
 
     combined_counter = counter << 8 | session_use;
@@ -193,9 +193,9 @@ static bool add_userinfo_if_complete(uint8_t *private_id, uint8_t *aeskey,
                                      struct contextinfo *context)
 {
     /* private ID and AES key are mandatory */
-    if (!memcmp(zeroid, private_id, sizeof(zeroid)))
+    if (!memcmp(zeroid, private_id, YUBIKEY_UID_SIZE))
         return false;
-    if (!memcmp(zerokey, aeskey, sizeof(zerokey)))
+    if (!memcmp(zerokey, aeskey, YUBIKEY_KEY_SIZE))
         return false;
     users = realloc(users, (num_users + 1) * sizeof(*users));
     if (!users)
@@ -204,9 +204,8 @@ static bool add_userinfo_if_complete(uint8_t *private_id, uint8_t *aeskey,
     users[num_users].num_context = num_context;
     users[num_users].context = context;
     users[num_users].combined_counter = 0; // TODO read from other config
-    memcpy(users[num_users].aeskey, aeskey, sizeof(users[num_users].aeskey));
-    memcpy(users[num_users].yubi_private_id, private_id,
-            sizeof(users[num_users].yubi_private_id));
+    memcpy(users[num_users].aeskey, aeskey, YUBIKEY_KEY_SIZE);
+    memcpy(users[num_users].yubi_private_id, private_id, YUBIKEY_UID_SIZE);
     users[num_users].yubi_public_id = public_id;
     num_users++;
     return true;
@@ -261,24 +260,24 @@ static void read_config(char *configpath)
             if (!add_userinfo_if_complete(private_id, aeskey, public_id,
                                           num_context, context))
                 config_error_exit(linenum);
-            memset(private_id, 0, sizeof(private_id));
-            memset(aeskey, 0, sizeof(aeskey));
+            memset(private_id, 0, YUBIKEY_UID_SIZE);
+            memset(aeskey, 0, YUBIKEY_KEY_SIZE);
             public_id = NULL;
             num_context = 0;
             context = NULL;
         } else if (!strncmp(linebuf, "private_id ", 11)) {
-            if (memcmp(zeroid, private_id, sizeof(zeroid)))
+            if (memcmp(zeroid, private_id, YUBIKEY_UID_SIZE))
                 config_error_exit(linenum); /* id already set */
             if (line_length != 23)
                 config_error_exit(linenum); /* ID length incorrect */
             yubikey_modhex_decode((char *)private_id, linebuf + 11,
-                                  sizeof(private_id));
+                                  YUBIKEY_UID_SIZE);
         } else if (!strncmp(linebuf, "aeskey ", 7)) {
-            if (memcmp(zerokey, aeskey, sizeof(zerokey)))
+            if (memcmp(zerokey, aeskey, YUBIKEY_KEY_SIZE))
                 config_error_exit(linenum); /* key already set */
             if (line_length != 39)
                 config_error_exit(linenum); /* AES key length incorrect */
-            yubikey_hex_decode((char *)aeskey, linebuf + 7, sizeof(aeskey));
+            yubikey_hex_decode((char *)aeskey, linebuf + 7, YUBIKEY_KEY_SIZE);
         } else if (!strncmp(linebuf, "public_id ", 10)) {
             if (public_id)
                 config_error_exit(linenum); /* public ID already set */
