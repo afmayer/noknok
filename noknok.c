@@ -128,8 +128,7 @@ static bool read_request(int fd, char *buffer, size_t bufsize, char **context,
     *user = NULL;
     *token = NULL;
     for (i = 0; i < (size_t)r; i++) {
-        if (buffer[i] == '!') {
-            buffer[i] = 0;
+        if (buffer[i] == '\0') {
             if (!*context) {
                 *context = buffer;
                 zero = i;
