@@ -185,7 +185,7 @@ static void handle_connection(int fd)
         return;
 
     userinfo->combined_counter = combined_counter;
-    write(fd, userid, strlen(userid) + 1);
+    ret = write(fd, userid, strlen(userid) + 1);
 }
 
 static bool add_userinfo_if_complete(uint8_t *private_id, uint8_t *aeskey,
