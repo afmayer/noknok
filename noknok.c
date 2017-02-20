@@ -312,28 +312,61 @@ static void read_config(char *configpath)
     free(linebuf);
 }
 
+static void usage_exit(const char *argv0)
+{
+    fprintf(stderr, "Usage: %s [options] socketpath\n", argv0);
+    exit(1);
+}
+
+#define argv_is(x) (strcmp(*argv, x) == 0)
+#define assert_and_assign_next_argv_to(x) \
+    do { \
+        if (argc > 1) { \
+            argv++; argc--; \
+            (x) = *argv; \
+        } else { \
+            fprintf(stderr, "Missing argument for option '%s'\n", *argv); \
+            exit(1); \
+        } \
+    } while (0)
 int main(int argc, char *argv[])
 {
-    char *path;
+    const char *argv0 = *argv;
+    char *socketpath = NULL;
+    char *configpath = "/etc/noknok.conf";
     int l;
     struct sockaddr_un local;
 
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s socketpath\n", argv[0]);
-        exit(1);
+    argv++; argc--;
+    while (argc > 0) {
+        if (argv_is("-c") || argv_is("--config")) {
+            assert_and_assign_next_argv_to(configpath);
+        } else if (*argv[0] == '-') {
+            fprintf(stderr, "Unknown option '%s'\n", *argv);
+            exit(1);
+        } else {
+            if (socketpath)
+                usage_exit(argv0);
+            socketpath = *argv;
+        }
+        argv++; argc--;
     }
 
-    path = argv[1];
+    if (!socketpath)
+        usage_exit(argv0);
+
+    read_config(configpath);
+
     l = socket(AF_UNIX, SOCK_STREAM, 0);
     if (l == -1)
         error_exit("Error creating socket", 1);
 
-    unlink(path);
+    unlink(socketpath);
 
     // TODO use umask()?
     memset(&local, 0, sizeof(local));
     local.sun_family = AF_UNIX;
-    strncpy(local.sun_path, path, sizeof(local.sun_path) - 1);
+    strncpy(local.sun_path, socketpath, sizeof(local.sun_path) - 1);
     if (bind(l, (struct sockaddr *)&local, sizeof(struct sockaddr_un)) == -1)
         error_exit("Error binding socket", 1);
 
