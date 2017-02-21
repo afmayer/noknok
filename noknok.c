@@ -333,8 +333,9 @@ int main(int argc, char *argv[])
     const char *argv0 = *argv;
     char *socketpath = NULL;
     char *configpath = "/etc/noknok.conf";
-    int l;
+    int l, rc;
     struct sockaddr_un local;
+    mode_t oldmask;
 
     argv++; argc--;
     while (argc > 0) {
@@ -366,7 +367,10 @@ int main(int argc, char *argv[])
     memset(&local, 0, sizeof(local));
     local.sun_family = AF_UNIX;
     strncpy(local.sun_path, socketpath, sizeof(local.sun_path) - 1);
-    if (bind(l, (struct sockaddr *)&local, sizeof(struct sockaddr_un)) == -1)
+    oldmask = umask(0);
+    rc = bind(l, (struct sockaddr *)&local, sizeof(struct sockaddr_un));
+    umask(oldmask);
+    if (rc == -1)
         error_exit("Error binding socket", 1);
 
     if (listen(l, 3) == -1)
