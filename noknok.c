@@ -32,6 +32,8 @@ struct userinfo {
 static uint8_t zeroid[YUBIKEY_UID_SIZE];
 static uint8_t zerokey[YUBIKEY_KEY_SIZE];
 
+static bool debug_requests;
+
 static void error_exit(const char *message, int use_perror)
 {
     if (use_perror)
@@ -91,13 +93,19 @@ static int yubikey_decode(const char *token, const uint8_t *aeskey,
     yubikey_token_st tok;
     if (strlen(token) > 32)
         token = token + (strlen(token) - 32);
-    if (strlen(token) != 32)
+    if (strlen(token) != 32) {
+        if (debug_requests)
+            fprintf(stderr, "   RESULT: REJECTED (token too short)\n\n");
         return -2;
+    }
 
     yubikey_parse((uint8_t *)token, aeskey, &tok);
 
-    if (!yubikey_crc_ok_p((uint8_t *)&tok))
+    if (!yubikey_crc_ok_p((uint8_t *)&tok)) {
+        if (debug_requests)
+            fprintf(stderr, "   RESULT: REJECTED (CRC mismatch)\n\n");
         return -1;
+    }
 
     if (private_id)
         memcpy(private_id, &tok.uid, YUBIKEY_UID_SIZE);
@@ -151,6 +159,7 @@ static bool read_request(int fd, char *buffer, size_t bufsize, char **context,
 
 static void handle_connection(int fd)
 {
+    bool bret;
     int ret;
     char buffer[1024];
     char *context, *userid, *token;
@@ -161,7 +170,19 @@ static void handle_connection(int fd)
     uint32_t timestamp, combined_counter;
     uint8_t session_use;
 
-    if (!read_request(fd, buffer, sizeof(buffer), &context, &userid, &token))
+    bret = read_request(fd, buffer, sizeof(buffer), &context, &userid, &token);
+
+    if (debug_requests) {
+        if (bret)
+            fprintf(stderr, "New incoming request\n"
+                            "  context: %s\n"
+                            "   userid: %s\n"
+                            "    token: %s\n", context, userid, token);
+        else
+            fprintf(stderr, "New incoming request with INVALID FORMAT\n\n");
+    }
+
+    if (!bret)
         return;
 
     if (strlen(userid) == 0)
@@ -169,20 +190,33 @@ static void handle_connection(int fd)
     else
         userinfo = get_userinfo_by_username(context, userid);
 
-    if (!userinfo)
-        return; /* can't identify user */
+    if (!userinfo) {
+        /* can't identify user */
+        if (debug_requests)
+            fprintf(stderr, "   RESULT: REJECTED (can't identify user)\n\n");
+        return;
+    }
 
     ret = yubikey_decode(token, userinfo->aeskey, private_id, &counter,
                          &capslock, &timestamp, &session_use, &random);
     if (ret != 0)
         return;
 
-    if (memcmp(private_id, userinfo->yubi_private_id, YUBIKEY_UID_SIZE))
+    if (memcmp(private_id, userinfo->yubi_private_id, YUBIKEY_UID_SIZE)) {
+        if (debug_requests)
+            fprintf(stderr, "   RESULT: REJECTED (ID does not match)\n\n");
         return;
+    }
 
     combined_counter = counter << 8 | session_use;
-    if (combined_counter <= userinfo->combined_counter)
+    if (combined_counter <= userinfo->combined_counter) {
+        if (debug_requests)
+            fprintf(stderr, "   RESULT: REJECTED (old counter value)\n\n");
         return;
+    }
+
+    if (debug_requests)
+        fprintf(stderr, "   RESULT: APPROVED (user \"%s\")\n\n", userid);
 
     userinfo->combined_counter = combined_counter;
     ret = write(fd, userid, strlen(userid) + 1);
@@ -341,6 +375,8 @@ int main(int argc, char *argv[])
     while (argc > 0) {
         if (argv_is("-c") || argv_is("--config")) {
             assert_and_assign_next_argv_to(configpath);
+        } else if (argv_is("--debug-requests")) {
+            debug_requests = true;
         } else if (*argv[0] == '-') {
             fprintf(stderr, "Unknown option '%s'\n", *argv);
             exit(1);
