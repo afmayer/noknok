@@ -304,8 +304,8 @@ static void read_config(char *configpath)
                 config_error_exit(linenum); /* id already set */
             if (line_length != 23)
                 config_error_exit(linenum); /* ID length incorrect */
-            yubikey_modhex_decode((char *)private_id, linebuf + 11,
-                                  YUBIKEY_UID_SIZE);
+            yubikey_hex_decode((char *)private_id, linebuf + 11,
+                               YUBIKEY_UID_SIZE);
         } else if (!strncmp(linebuf, "aeskey ", 7)) {
             if (memcmp(zerokey, aeskey, YUBIKEY_KEY_SIZE))
                 config_error_exit(linenum); /* key already set */
