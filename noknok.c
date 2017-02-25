@@ -11,9 +11,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-// TODO try what happens if illegal characters are fed to _yubikey_decode()
-// TODO persist counters on exit
-
 struct contextinfo {
     char *context;
     char *username;
@@ -275,7 +272,7 @@ static void read_config(char *configpath)
     if (fd == -1)
         error_exit("Error opening configuration file", 1);
     if (fstat(fd, &stat) == -1)
-        error_exit("Error calling stat() on configuration file", 1);
+        error_exit("Error calling fstat() on configuration file", 1);
     if (stat.st_mode & (S_IROTH | S_IWOTH))
         error_exit("Won't accept a world-readable or world-writable "
                    "configuration file", 0);
@@ -399,7 +396,6 @@ int main(int argc, char *argv[])
 
     unlink(socketpath);
 
-    // TODO use umask()?
     memset(&local, 0, sizeof(local));
     local.sun_family = AF_UNIX;
     strncpy(local.sun_path, socketpath, sizeof(local.sun_path) - 1);
