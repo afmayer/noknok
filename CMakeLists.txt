@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8)
 project(noknok C)
 
-set(COMMON_CFLAGS "-Wall -Wextra")
+set(COMMON_CFLAGS "-Wall -Wextra -Wno-unused-parameter")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(COMMON_CFLAGS "${COMMON_CFLAGS} -O0")
 else(CMAKE_BUILD_TYPE STREQUAL "Debug")
