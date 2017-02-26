@@ -1,5 +1,6 @@
 #include "yubikey.h"
 #include <fcntl.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -30,6 +31,7 @@ static uint8_t zeroid[YUBIKEY_UID_SIZE];
 static uint8_t zerokey[YUBIKEY_KEY_SIZE];
 
 static bool debug_requests;
+const char *counterpath = "/var/lib/noknok/counters";
 
 static void error_exit(const char *message, int use_perror)
 {
@@ -250,7 +252,7 @@ static void config_error_exit(size_t linenumber)
     error_exit(buffer, 0);
 }
 
-static void read_config(char *configpath)
+static void read_config(const char *configpath)
 {
     int fd;
     struct stat stat;
@@ -342,6 +344,23 @@ static void read_config(char *configpath)
     free(linebuf);
 }
 
+static void read_counters(void)
+{
+    // TODO implement read_counters()
+}
+
+static void persist_counters(void)
+{
+    /* this function must remain signal-safe */
+    // TODO implement persist_counters()
+}
+
+static void signalhandler(int signum)
+{
+    persist_counters();
+    _exit(0);
+}
+
 static void usage_exit(const char *argv0)
 {
     fprintf(stderr, "Usage: %s [options] socketpath\n", argv0);
@@ -364,6 +383,7 @@ int main(int argc, char *argv[])
     const char *argv0 = *argv;
     char *socketpath = NULL;
     char *configpath = "/etc/noknok.conf";
+    struct sigaction sa;
     int l, rc;
     struct sockaddr_un local;
     mode_t oldmask;
@@ -372,6 +392,8 @@ int main(int argc, char *argv[])
     while (argc > 0) {
         if (argv_is("-c") || argv_is("--config")) {
             assert_and_assign_next_argv_to(configpath);
+        } else if (argv_is("--counters")) {
+            assert_and_assign_next_argv_to(counterpath);
         } else if (argv_is("--debug-requests")) {
             debug_requests = true;
         } else if (*argv[0] == '-') {
@@ -389,6 +411,18 @@ int main(int argc, char *argv[])
         usage_exit(argv0);
 
     read_config(configpath);
+    read_counters();
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signalhandler;
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGHUP, &sa, NULL) == -1 ||
+            sigaction(SIGINT, &sa, NULL) == -1 ||
+            sigaction(SIGPIPE, &sa, NULL) == -1 ||
+            sigaction(SIGTERM, &sa, NULL) == -1 ||
+            sigaction(SIGUSR1, &sa, NULL) == -1 ||
+            sigaction(SIGUSR2, &sa, NULL) == -1)
+        error_exit("Error installing signal handler", 1);
 
     l = socket(AF_UNIX, SOCK_STREAM, 0);
     if (l == -1)
@@ -407,6 +441,9 @@ int main(int argc, char *argv[])
 
     if (listen(l, 3) == -1)
         error_exit("Error listening to socket", 1);
+
+    if (atexit(persist_counters) != 0)
+        error_exit("Error installing exit handler", 0);
 
     while (1) {
         int c = accept(l, NULL, NULL);
