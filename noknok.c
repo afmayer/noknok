@@ -401,6 +401,8 @@ static void unlink_socket_and_persist_counters(void)
 
 static void signalhandler(int signum)
 {
+    if (signum == SIGPIPE)
+        return;
     unlink_socket_and_persist_counters();
     _exit(0);
 }
