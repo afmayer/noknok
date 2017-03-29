@@ -32,6 +32,7 @@ static uint8_t zerokey[YUBIKEY_KEY_SIZE];
 
 static bool debug_requests;
 const char *counterpath = "/var/lib/noknok/counters";
+const char *socketpath;
 
 static void error_exit(const char *message, int use_perror)
 {
@@ -349,15 +350,58 @@ static void read_counters(void)
     // TODO implement read_counters()
 }
 
-static void persist_counters(void)
+static size_t u32_to_line(char *buffer, uint32_t value)
+{
+    /* buffer size must at be least 11 bytes (10 digits + newline) */
+    uint32_t div;
+    size_t num_digits = 0;
+
+    if (value == 0) {
+        *buffer++ = '0';
+        num_digits = 1;
+    } else {
+        for (div = 1000000000UL; div != 0; div /= 10) {
+            int digit = value / div % 10;
+            if (num_digits == 0 && digit == 0)
+                continue;
+            *buffer++ = '0' + digit;
+            num_digits++;
+        }
+    }
+    *buffer = '\n';
+    return num_digits + 1;
+}
+
+static void unlink_socket_and_persist_counters(void)
 {
     /* this function must remain signal-safe */
-    // TODO implement persist_counters()
+    size_t i;
+    int fd;
+    char id_buffer[2 * YUBIKEY_UID_SIZE + 1];
+    char counter_buffer[11];
+
+    unlink(socketpath);
+    fd = open(counterpath, O_WRONLY | O_CREAT | O_TRUNC,
+              S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+    if (fd == -1)
+        return;
+    for (i = 0; i < num_users; i++) {
+        size_t line_bytes;
+        yubikey_hex_encode(id_buffer, (char *)users[i].yubi_private_id,
+                           YUBIKEY_UID_SIZE);
+        id_buffer[sizeof(id_buffer) - 1] = '\n';
+        if (write(fd, id_buffer, sizeof(id_buffer)) == -1)
+            return;
+        line_bytes = u32_to_line(counter_buffer, users[i].combined_counter);
+        if (write(fd, counter_buffer, line_bytes) == -1)
+            return;
+    }
+    close(fd);
 }
 
 static void signalhandler(int signum)
 {
-    persist_counters();
+    unlink_socket_and_persist_counters();
     _exit(0);
 }
 
@@ -381,7 +425,6 @@ static void usage_exit(const char *argv0)
 int main(int argc, char *argv[])
 {
     const char *argv0 = *argv;
-    char *socketpath = NULL;
     char *configpath = "/etc/noknok.conf";
     struct sigaction sa;
     int l, rc;
@@ -442,7 +485,7 @@ int main(int argc, char *argv[])
     if (listen(l, 3) == -1)
         error_exit("Error listening to socket", 1);
 
-    if (atexit(persist_counters) != 0)
+    if (atexit(unlink_socket_and_persist_counters) != 0)
         error_exit("Error installing exit handler", 0);
 
     while (1) {
