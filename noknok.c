@@ -1,5 +1,6 @@
 #include "yubikey.h"
 #include <fcntl.h>
+#include <inttypes.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -237,7 +238,7 @@ static bool add_userinfo_if_complete(uint8_t *private_id, uint8_t *aeskey,
 
     users[num_users].num_context = num_context;
     users[num_users].context = context;
-    users[num_users].combined_counter = 0; // TODO read from other config
+    users[num_users].combined_counter = 0;
     memcpy(users[num_users].aeskey, aeskey, YUBIKEY_KEY_SIZE);
     memcpy(users[num_users].yubi_private_id, private_id, YUBIKEY_UID_SIZE);
     users[num_users].yubi_public_id = public_id;
@@ -347,7 +348,45 @@ static void read_config(const char *configpath)
 
 static void read_counters(void)
 {
-    // TODO implement read_counters()
+    FILE *stream;
+    ssize_t line_length;
+    char *linebuf = NULL;
+    size_t linebufsize;
+    uint8_t private_id[YUBIKEY_UID_SIZE];
+    size_t i;
+
+    stream = fopen(counterpath, "r");
+    if (!stream)
+        return;
+    while ((line_length = getline(&linebuf, &linebufsize, stream)) != -1) {
+        if (linebuf[line_length - 1] == '\n') {
+            linebuf[line_length - 1] = '\0';
+            line_length--;
+        }
+        if (line_length != 2 * YUBIKEY_UID_SIZE)
+            goto exit;
+        yubikey_hex_decode((char *)private_id, linebuf, YUBIKEY_UID_SIZE);
+        for (i = 0; i < num_users; i++) {
+            if (!memcmp(private_id, users[i].yubi_private_id,
+                        YUBIKEY_UID_SIZE)) {
+                uint32_t counter;
+                if (getline(&linebuf, &linebufsize, stream) == -1)
+                    goto exit;
+                if (sscanf(linebuf, "%" SCNu32, &counter) != 1)
+                    goto exit;
+                users[i].combined_counter = counter;
+                break;
+            }
+        }
+
+        /* skip next line (counter value) in case the user was not found */
+        if (i == num_users)
+            if (getline(&linebuf, &linebufsize, stream) == -1)
+                goto exit;
+    }
+
+exit:
+    fclose(stream);
 }
 
 static size_t u32_to_line(char *buffer, uint32_t value)
@@ -427,7 +466,7 @@ static void usage_exit(const char *argv0)
 int main(int argc, char *argv[])
 {
     const char *argv0 = *argv;
-    char *configpath = "/etc/noknok.conf";
+    const char *configpath = "/etc/noknok.conf";
     struct sigaction sa;
     int l, rc;
     struct sockaddr_un local;
