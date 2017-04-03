@@ -1,4 +1,5 @@
 #include "yubikey.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <signal.h>
@@ -512,17 +513,34 @@ int main(int argc, char *argv[])
     if (l == -1)
         error_exit("Error creating socket", 1);
 
-    unlink(socketpath);
-
     memset(&local, 0, sizeof(local));
     local.sun_family = AF_UNIX;
     strncpy(local.sun_path, socketpath, sizeof(local.sun_path) - 1);
     oldmask = umask(0);
     rc = bind(l, (struct sockaddr *)&local, sizeof(struct sockaddr_un));
     umask(oldmask);
-    if (rc == -1)
+    if (rc == -1) {
+        if (errno == EADDRINUSE) {
+            int s = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (s == -1)
+                error_exit("Error creating outgoing socket", 1);
+            if (connect(s, (struct sockaddr *)&local, sizeof(local)) != -1)
+                error_exit("Already running", 0);
+            if (errno != ECONNREFUSED)
+                error_exit("Error trying to connect to running instance", 1);
+            close(s);
+            if (unlink(socketpath) == -1)
+                error_exit("Error removing leftover socket file", 1);
+            oldmask = umask(0);
+            rc = bind(l, (struct sockaddr *)&local, sizeof(struct sockaddr_un));
+            umask(oldmask);
+            if (rc != -1)
+                goto listen;
+        }
         error_exit("Error binding socket", 1);
+    }
 
+listen:
     if (listen(l, 3) == -1)
         error_exit("Error listening to socket", 1);
 
